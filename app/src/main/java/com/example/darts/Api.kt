@@ -10,9 +10,9 @@ import java.net.URL
 
 object Config {
     // Supabase → Project Settings → API
-    const val SUPABASE_URL = https://obewdcvaxuaehoyzydsx.supabase.co
+    const val SUPABASE_URL = "https://obewdcvaxuaehoyzydsx.supabase.co"
     // Только публичный ключ (anon / publishable). НЕ service_role и НЕ secret!
-    const val SUPABASE_KEY = sb_publishable_vAtJEF90ILV2MQtVLAJp7Q_TlCt0do-
+    const val SUPABASE_KEY = "sb_publishable_vAtJEF90ILV2MQtVLAJp7Q_TlCt0do"-
 }
 
 class Session(val userId: String, val accessToken: String)
