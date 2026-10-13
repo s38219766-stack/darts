@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -14,7 +14,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - run: gradle assembleDebug
+      - name: Build
+        run: |
+          gradle assembleDebug --console=plain > build.log 2>&1 && exit 0
+          msg=$(grep -E '^e: |What went wrong|Could not|error:' -A2 build.log | head -20)
+          [ -z "$msg" ] && msg=$(tail -25 build.log)
+          msg=$(printf '%s' "$msg" | sed ':a;N;$!ba;s/\n/%0A/g')
+          echo "::error title=Gradle::$msg"
+          exit 1
       - uses: actions/upload-artifact@v4
         with:
           name: darts-apk
