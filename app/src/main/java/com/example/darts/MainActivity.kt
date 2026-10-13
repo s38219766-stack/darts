@@ -101,12 +101,14 @@ fun DartsGame(onGameOver: (Boolean) -> Unit) {
         }
     }
 
-    val aim = Offset(sin(time * 1.7f) * 0.9f, sin(time * 2.3f + 1f) * 0.9f)
+    fun aimNow() = Offset(sin(time * 1.7f) * 0.9f, sin(time * 2.3f + 1f) * 0.9f)
+    val aim = aimNow()
 
     fun throwDart() {
-        if (over) return
-        darts = darts + aim
-        score += pointsFor(hypot(aim.x, aim.y))
+        if (throwsLeft == 0) return
+        val a = aimNow() // берём ТЕКУЩУЮ позицию прицела в момент тапа
+        darts = darts + a
+        score += pointsFor(hypot(a.x, a.y))
         throwsLeft -= 1
         if (throwsLeft == 0) onGameOver(score >= TARGET_SCORE)
     }
