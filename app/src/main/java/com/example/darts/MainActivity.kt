@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
@@ -29,10 +30,11 @@ const val THROWS_PER_ROUND = 5
 const val TARGET_SCORE = 40
 
 class MainActivity : ComponentActivity() {
+    private val api by lazy { Api(applicationContext) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Если прошлый запуск упал, показываем текст ошибки на экране
         val prefs = getSharedPreferences("crash", MODE_PRIVATE)
         val old = prefs.getString("crash", null)
         if (old != null) {
@@ -46,13 +48,7 @@ class MainActivity : ComponentActivity() {
             prev?.uncaughtException(t, e)
         }
 
-        setContent {
-            MaterialTheme {
-                DartsGame(onGameOver = { win ->
-                    // СЮДА потом подключим показ рекламы после поражения
-                })
-            }
-        }
+        setContent { MaterialTheme { App(api) } }
     }
 
     private fun showCrash(text: String, prefs: SharedPreferences) {
@@ -75,6 +71,98 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable
+fun App(api: Api) {
+    var screen by remember { mutableStateOf("game") }
+    if (screen == "game") {
+        DartsGame(
+            onGameOver = { win ->
+                // СЮДА потом подключим показ рекламы после поражения
+            },
+            onOpenBalance = { screen = "balance" }
+        )
+    } else {
+        BalanceScreen(api, onBack = { screen = "game" })
+    }
+}
+
+@Composable
+fun BalanceScreen(api: Api, onBack: () -> Unit) {
+    var profile by remember { mutableStateOf<Profile?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var code by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun load() {
+        try {
+            profile = api.getProfile()
+            error = null
+        } catch (e: Exception) {
+            error = "Нет связи с сервером: ${e.message}"
+        }
+    }
+    LaunchedEffect(Unit) { load() }
+
+    Column(
+        Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(Modifier.fillMaxWidth()) {
+            TextButton(onClick = onBack) { Text("← Назад к игре") }
+        }
+        Spacer(Modifier.height(24.dp))
+
+        val p = profile
+        when {
+            error != null -> {
+                Text(error!!, fontSize = 14.sp)
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { scope.launch { load() } }) { Text("Повторить") }
+            }
+            p == null -> CircularProgressIndicator()
+            !p.promoActive -> {
+                Text("Введите промокод", fontSize = 22.sp)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it },
+                    singleLine = true,
+                    label = { Text("Промокод") }
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    enabled = !busy && code.isNotBlank(),
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            message = null
+                            try {
+                                if (api.redeemPromo(code)) load()
+                                else message = "Неверный или закончившийся промокод"
+                            } catch (e: Exception) {
+                                message = "Ошибка: ${e.message}"
+                            }
+                            busy = false
+                        }
+                    }
+                ) { Text("Активировать") }
+                message?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, fontSize = 14.sp)
+                }
+            }
+            else -> {
+                Text("Ваш баланс", fontSize = 18.sp)
+                Text("${p.balance}", fontSize = 48.sp)
+                Spacer(Modifier.height(8.dp))
+                Text("Баланс пополняется за просмотр рекламы", fontSize = 14.sp)
+            }
+        }
+    }
+}
+
 fun pointsFor(dist: Float): Int = when {
     dist < 0.10f -> 50
     dist < 0.30f -> 25
@@ -84,7 +172,7 @@ fun pointsFor(dist: Float): Int = when {
 }
 
 @Composable
-fun DartsGame(onGameOver: (Boolean) -> Unit) {
+fun DartsGame(onGameOver: (Boolean) -> Unit, onOpenBalance: () -> Unit) {
     var time by remember { mutableStateOf(0f) }
     var darts by remember { mutableStateOf(listOf<Offset>()) }
     var score by remember { mutableStateOf(0) }
@@ -106,7 +194,7 @@ fun DartsGame(onGameOver: (Boolean) -> Unit) {
 
     fun throwDart() {
         if (throwsLeft == 0) return
-        val a = aimNow() // берём ТЕКУЩУЮ позицию прицела в момент тапа
+        val a = aimNow()
         darts = darts + a
         score += pointsFor(hypot(a.x, a.y))
         throwsLeft -= 1
@@ -121,13 +209,16 @@ fun DartsGame(onGameOver: (Boolean) -> Unit) {
         Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            OutlinedButton(onClick = onOpenBalance) { Text("Баланс") }
+        }
         Text("Очки: $score / $TARGET_SCORE", fontSize = 24.sp)
         Text("Бросков осталось: $throwsLeft", fontSize = 16.sp)
         Spacer(Modifier.height(12.dp))
 
         Canvas(
             Modifier.weight(1f).fillMaxWidth()
-                .pointerInput(over) { detectTapGestures { throwDart() } }
+                .pointerInput(Unit) { detectTapGestures { throwDart() } }
         ) {
             val c = Offset(size.width / 2, size.height / 2)
             val r = min(size.width, size.height) / 2 * 0.9f
