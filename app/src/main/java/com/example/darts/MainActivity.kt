@@ -1,5 +1,6 @@
 package com.example.darts
 
+import android.app.Activity
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.util.Log
@@ -21,6 +22,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.hypot
 import kotlin.math.min
@@ -31,6 +33,7 @@ const val TARGET_SCORE = 40
 
 class MainActivity : ComponentActivity() {
     private val api by lazy { Api(applicationContext) }
+    private val ads by lazy { Ads(applicationContext) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,7 +51,8 @@ class MainActivity : ComponentActivity() {
             prev?.uncaughtException(t, e)
         }
 
-        setContent { MaterialTheme { App(api) } }
+        ads.init()
+        setContent { MaterialTheme { App(api, ads, this@MainActivity) } }
     }
 
     private fun showCrash(text: String, prefs: SharedPreferences) {
@@ -72,23 +76,101 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun App(api: Api) {
+fun App(api: Api, ads: Ads, activity: Activity) {
     var screen by remember { mutableStateOf("game") }
+    var profile by remember { mutableStateOf<Profile?>(null) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var watching by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun refresh(): Boolean = try {
+        profile = api.getProfile()
+        true
+    } catch (e: Exception) {
+        false
+    }
+    LaunchedEffect(Unit) { refresh() }
+
+    // Реклама за награду, затем ждём, пока сервер получит подтверждение от Unity
+    fun watchForReward() {
+        if (watching) return
+        watching = true
+        status = null
+        scope.launch {
+            val uid = try {
+                api.ensureSession().userId
+            } catch (e: Exception) {
+                status = "Нет связи с сервером"
+                watching = false
+                return@launch
+            }
+            val before = profile?.balance ?: 0L
+            val started = ads.showRewarded(activity, uid) { completed ->
+                scope.launch {
+                    if (!completed) {
+                        status = "Реклама не досмотрена"
+                        watching = false
+                        return@launch
+                    }
+                    status = "Просмотр засчитан, ждём начисления…"
+                    var credited = false
+                    repeat(10) {
+                        if (!credited) {
+                            delay(3000)
+                            refresh()
+                            if ((profile?.balance ?: 0L) > before) credited = true
+                        }
+                    }
+                    status = if (credited) "Баланс пополнен!"
+                    else "Начисление ещё не пришло. Загляните в баланс чуть позже."
+                    watching = false
+                }
+            }
+            if (!started) {
+                status = "Реклама ещё загружается, попробуйте через несколько секунд"
+                watching = false
+            }
+        }
+    }
+
     if (screen == "game") {
         DartsGame(
+            promoActive = profile?.promoActive == true,
+            rewardReady = ads.rewardedReady,
+            watching = watching,
+            status = status,
             onGameOver = { win ->
-                // СЮДА потом подключим показ рекламы после поражения
+                // Обычным игрокам после поражения показываем рекламу сразу
+                if (!win && profile?.promoActive != true) ads.showInterstitial(activity)
             },
+            onWatchReward = { watchForReward() },
             onOpenBalance = { screen = "balance" }
         )
     } else {
-        BalanceScreen(api, onBack = { screen = "game" })
+        BalanceScreen(
+            api = api,
+            profile = profile,
+            onRefresh = { refresh() },
+            rewardReady = ads.rewardedReady,
+            watching = watching,
+            status = status,
+            onWatchReward = { watchForReward() },
+            onBack = { screen = "game" }
+        )
     }
 }
 
 @Composable
-fun BalanceScreen(api: Api, onBack: () -> Unit) {
-    var profile by remember { mutableStateOf<Profile?>(null) }
+fun BalanceScreen(
+    api: Api,
+    profile: Profile?,
+    onRefresh: suspend () -> Boolean,
+    rewardReady: Boolean,
+    watching: Boolean,
+    status: String?,
+    onWatchReward: () -> Unit,
+    onBack: () -> Unit
+) {
     var error by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     var code by remember { mutableStateOf("") }
@@ -96,12 +178,7 @@ fun BalanceScreen(api: Api, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     suspend fun load() {
-        try {
-            profile = api.getProfile()
-            error = null
-        } catch (e: Exception) {
-            error = "Нет связи с сервером: ${e.message}"
-        }
+        error = if (onRefresh()) null else "Нет связи с сервером"
     }
     LaunchedEffect(Unit) { load() }
 
@@ -116,7 +193,7 @@ fun BalanceScreen(api: Api, onBack: () -> Unit) {
 
         val p = profile
         when {
-            error != null -> {
+            p == null && error != null -> {
                 Text(error!!, fontSize = 14.sp)
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = { scope.launch { load() } }) { Text("Повторить") }
@@ -156,8 +233,17 @@ fun BalanceScreen(api: Api, onBack: () -> Unit) {
             else -> {
                 Text("Ваш баланс", fontSize = 18.sp)
                 Text("${p.balance}", fontSize = 48.sp)
-                Spacer(Modifier.height(8.dp))
-                Text("Баланс пополняется за просмотр рекламы", fontSize = 14.sp)
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    enabled = rewardReady && !watching,
+                    onClick = onWatchReward
+                ) {
+                    Text(if (rewardReady) "▶ Смотреть рекламу и получить баланс" else "Реклама загружается…")
+                }
+                status?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, fontSize = 14.sp)
+                }
             }
         }
     }
@@ -172,7 +258,15 @@ fun pointsFor(dist: Float): Int = when {
 }
 
 @Composable
-fun DartsGame(onGameOver: (Boolean) -> Unit, onOpenBalance: () -> Unit) {
+fun DartsGame(
+    promoActive: Boolean,
+    rewardReady: Boolean,
+    watching: Boolean,
+    status: String?,
+    onGameOver: (Boolean) -> Unit,
+    onWatchReward: () -> Unit,
+    onOpenBalance: () -> Unit
+) {
     var time by remember { mutableStateOf(0f) }
     var darts by remember { mutableStateOf(listOf<Offset>()) }
     var score by remember { mutableStateOf(0) }
@@ -243,6 +337,12 @@ fun DartsGame(onGameOver: (Boolean) -> Unit, onOpenBalance: () -> Unit) {
         if (over) {
             val win = score >= TARGET_SCORE
             Text(if (win) "Победа!" else "Поражение", fontSize = 28.sp)
+            if (!win && promoActive) {
+                Button(enabled = rewardReady && !watching, onClick = onWatchReward) {
+                    Text(if (rewardReady) "▶ Смотреть рекламу и получить баланс" else "Реклама загружается…")
+                }
+            }
+            status?.let { Text(it, fontSize = 14.sp) }
             Button(onClick = { restart() }) { Text("Играть снова") }
         } else {
             Text("Тапни по экрану, чтобы бросить дротик", fontSize = 14.sp)
