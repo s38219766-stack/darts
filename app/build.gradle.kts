@@ -22,7 +22,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+        // SDK Unity Ads может быть собран более новым Kotlin
+        freeCompilerArgs += listOf("-Xskip-metadata-version-check")
+    }
 }
 
 dependencies {
@@ -31,5 +35,6 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.9.0")
-implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("com.unity3d.ads:unity-ads:4.20.0")
 }
